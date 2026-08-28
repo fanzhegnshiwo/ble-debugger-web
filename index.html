@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0e1216" />
+<title>BLE 调试助手 · 网页版</title>
+<link rel="stylesheet" href="css/style.css" />
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<header id="app-header">
+  <div class="brand">BLE 调试助手<span>网页版</span></div>
+  <div id="status-pill" class="pill off">未连接</div>
+</header>
+
+<nav id="tabbar">
+  <button data-page="conn" class="active" type="button">连接</button>
+  <button data-page="gatt" type="button">GATT</button>
+  <button data-page="console" type="button">控制台</button>
+  <button data-page="proto" type="button">协议</button>
+</nav>
+
+<main id="main">
+  <!-- 连接 -->
+  <section id="page-conn" class="page active">
+    <div id="compat-banner" class="banner" hidden>
+      当前浏览器不支持 Web Bluetooth。请使用 Android 版 Chrome / Edge 访问（iOS Safari 与 Firefox 不支持该特性）。
+    </div>
+    <div id="https-banner" class="banner warn" hidden>
+      当前页面不是安全上下文（HTTPS），Web Bluetooth 将不可用。请通过 HTTPS 或 localhost 访问。
+    </div>
+
+    <div class="card">
+      <div class="card-title">扫描并连接</div>
+      <div class="field">
+        <label for="scan-mode">筛选方式</label>
+        <select id="scan-mode">
+          <option value="named">仅列出有名称的设备（推荐）</option>
+          <option value="prefix">按名称前缀筛选</option>
+          <option value="all">所有设备（含未命名）</option>
+        </select>
+      </div>
+      <div class="field" id="scan-prefix-field" hidden>
+        <label for="scan-prefix">名称前缀</label>
+        <input id="scan-prefix" type="text" placeholder="例如 HM、" />
+      </div>
+      <div class="field">
+        <label for="scan-services">广播服务 UUID（可选，逗号分隔，如 180F, FFE0）</label>
+        <input id="scan-services" type="text" placeholder="180F, FFE0" />
+      </div>
+      <div class="field">
+        <label for="scan-optional">附加可访问服务（可选，连接后可操作的服务）</label>
+        <input id="scan-optional" type="text" placeholder="默认已包含常用服务" />
+      </div>
+      <button id="btn-scan" class="btn primary block" type="button">选择设备并连接</button>
+      <p class="hint">浏览器将弹出系统设备选择器；列表由系统提供，页面无法直接获取原始扫描结果。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title row">
+        <span>已授权设备</span>
+        <button id="btn-refresh-known" class="btn small" type="button">刷新</button>
+      </div>
+      <div id="known-list" class="known-list"></div>
+    </div>
+
+    <div class="card" id="device-card" hidden>
+      <div class="card-title">当前设备</div>
+      <div id="device-info"></div>
+      <div class="row wrap">
+        <button id="btn-watch" class="btn" type="button">监听广播（RSSI）</button>
+        <button id="btn-disconnect" class="btn danger" type="button">断开连接</button>
+      </div>
+      <label class="check"><input id="chk-reconnect" type="checkbox" /> 断开后自动重连（最多 5 次）</label>
+    </div>
+  </section>
+
+  <!-- GATT -->
+  <section id="page-gatt" class="page">
+    <div id="gatt-empty" class="empty">未连接设备。请先在「连接」页选择并连接设备。</div>
+    <div id="gatt-tree"></div>
+  </section>
+
+  <!-- 控制台 -->
+  <section id="page-console" class="page">
+    <div class="card console-bar">
+      <div class="row wrap">
+        <div class="chips">
+          <button class="chip rx active" data-dir="rx" type="button">RX</button>
+          <button class="chip tx active" data-dir="tx" type="button">TX</button>
+          <button class="chip sys active" data-dir="sys" type="button">系统</button>
+          <button class="chip err active" data-dir="err" type="button">错误</button>
+        </div>
+        <select id="view-format" title="新日志的显示格式">
+          <option value="hex">HEX</option>
+          <option value="ascii">ASCII</option>
+          <option value="mixed">HEX+ASCII</option>
+        </select>
+      </div>
+      <div class="row wrap">
+        <button id="btn-pause" class="btn small" type="button">暂停</button>
+        <button id="btn-clear" class="btn small" type="button">清空</button>
+        <button id="btn-export" class="btn small" type="button">导出日志</button>
+        <span id="log-stats" class="hint">RX 0 · TX 0</span>
+      </div>
+    </div>
+    <div id="log-list" class="log-list"></div>
+  </section>
+
+  <!-- 协议 -->
+  <section id="page-proto" class="page">
+    <div class="card">
+      <div class="card-title">特征与数据源</div>
+      <div class="field">
+        <label for="proto-uuid">特征 UUID</label>
+        <input id="proto-uuid" class="mono" type="text" placeholder="例如 2A19、FFE1 或完整 UUID" />
+      </div>
+      <div id="proto-chips" class="row wrap"></div>
+      <div class="field">
+        <label for="proto-paste">粘贴 HEX 数据（可选，用于离线解析）</label>
+        <textarea id="proto-paste" class="mono" rows="2" placeholder="01 02 03 04"></textarea>
+      </div>
+      <div class="row wrap">
+        <button id="btn-parse-paste" class="btn small" type="button">解析粘贴数据</button>
+        <button id="btn-use-latest" class="btn small" type="button">使用最新接收数据</button>
+        <label class="check"><input id="chk-live" type="checkbox" checked /> 接收时实时解析</label>
+      </div>
+      <div id="byte-info" class="hint"></div>
+      <div id="byte-grid" class="byte-grid"></div>
+      <div class="row" id="byte-actions" hidden>
+        <button id="btn-add-field" class="btn primary" type="button">添加为字段</button>
+        <button id="btn-clear-sel" class="btn" type="button">取消选择</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title row wrap">
+        <span>解析规则</span>
+        <span class="row wrap">
+          <button id="btn-rule-add" class="btn small" type="button">添加字段</button>
+          <button id="btn-rule-export" class="btn small" type="button">导出规则</button>
+          <button id="btn-rule-import" class="btn small" type="button">导入规则</button>
+          <input id="rule-import-file" type="file" accept=".json,application/json" hidden />
+        </span>
+      </div>
+      <div id="rules-list"></div>
+      <p class="hint">规则按特征 UUID 自动保存到本地；「接收时实时解析」开启后，该特征的新数据会自动套用规则。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title row">
+        <span>解析结果</span>
+        <button id="btn-result-csv" class="btn small" type="button">导出 CSV</button>
+      </div>
+      <div id="proto-results"></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
