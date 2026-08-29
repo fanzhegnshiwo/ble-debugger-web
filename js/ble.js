@@ -81,13 +81,14 @@ export class BleAdapter extends EventBus {
     this.tree = [];                 // [{ uuid, label, chars: [...], error }]
     this.chars = new Map();         // "svc/chr" -> BluetoothRemoteGATTCharacteristic
     this._svcOf = new Map();        // key -> service uuid
-    this._handlers = new Map();     // key -> valuechanged 处理器
+    this._notifyHandlers = new Map(); // key -> valuechanged 处理器（注意：不能叫 _handlers，会与 EventBus 的监听器表冲突）
     this.subscribedKeys = new Set();
     this.pollKey = null;
     this._pollTimer = null;
     this.autoReconnect = true;
     this._manualClose = false;
     this._connecting = false;
+    this._session = 0;             // 连接会话代数：断开/换设备时 +1，使旧流水线失效
     this._retries = 0;
     this._reconnectTimer = null;
     this._watching = false;
@@ -119,7 +120,12 @@ export class BleAdapter extends EventBus {
 
   /** 连接一个已知设备（来自 requestDevice 或 getDevices） */
   async attach(device) {
-    if (this._connecting) throw new Error('正在连接中，请稍候');
+    // 若有进行中的连接流水线（自动重连/发现重试），使其失效并断开旧设备，允许接管
+    if (this._connecting) {
+      this._session++;
+      this._connecting = false;
+      try { this.device?.gatt?.disconnect(); } catch { /* ignore */ }
+    }
     if (this.device && this.device !== device) this._reset();
     // 清掉 pending 的自动重连定时器，避免与新连接并发（同设备重连场景）
     this._clearReconnect();
@@ -129,6 +135,7 @@ export class BleAdapter extends EventBus {
     this.device.addEventListener('gattserverdisconnected', this._onDisconnectedBound);
     this._manualClose = false;
     this._discoveryRetried = false;
+    this._session++; // 使上一条流水线（若有残留）失效
     await this._connect();
   }
 
@@ -151,12 +158,15 @@ export class BleAdapter extends EventBus {
 
   /** GATT 连接：失败自动重试 1 次（Android 配对后首连常见瞬时失败） */
   async _connectGatt() {
+    const sess = this._session;
     const TIMEOUT = 20000;
     try {
       await this._gattConnectOnce(TIMEOUT);
     } catch (e) {
+      if (sess !== this._session) throw new Error('连接已取消');
       this.emit('log', { dir: 'sys', text: `首次连接失败（${e.message}），1.5 秒后自动重试…` });
       await new Promise((r) => setTimeout(r, 1500));
+      if (sess !== this._session) throw new Error('连接已取消');
       // 清理可能残留的半连接状态后重试
       try { this.device.gatt.disconnect(); } catch { /* ignore */ }
       await this._gattConnectOnce(TIMEOUT);
@@ -165,6 +175,7 @@ export class BleAdapter extends EventBus {
   }
 
   async _connect() {
+    const sess = this._session;
     const name = this.device?.name || '设备';
     this._connecting = true;
     this.emit('state');
@@ -173,9 +184,16 @@ export class BleAdapter extends EventBus {
       await this._connectGatt();
     } catch (e) {
       this._connecting = false;
+      if (sess !== this._session) return; // 用户已断开/换设备，静默取消
       this.emit('log', { dir: 'err', text: `连接失败：${e.message}` });
       this.emit('state');
       throw e;
+    }
+    // connect() 可能在用户点断开后才完成：再次断开并放弃本次会话
+    if (sess !== this._session) {
+      this._connecting = false;
+      try { this.device?.gatt.disconnect(); } catch { /* ignore */ }
+      return;
     }
     this._connecting = false;
     this._retries = 0;
@@ -184,6 +202,7 @@ export class BleAdapter extends EventBus {
     try {
       await this.discover();
     } catch (e) {
+      if (sess !== this._session) return; // 用户已断开
       this.emit('log', { dir: 'err', text: `服务发现失败：${e.message}` });
       // 服务发现失败/超时：断开后全新连接重试一次（Android GATT 缓存问题的标准解法）
       if (!this._discoveryRetried) {
@@ -191,12 +210,15 @@ export class BleAdapter extends EventBus {
         this.emit('conn-error', `服务发现失败（${e.message}），正在断开并重新连接重试…`);
         try { this.device.gatt.disconnect(); } catch { /* ignore */ }
         await new Promise((r) => setTimeout(r, 1200));
+        if (sess !== this._session) return; // 等待期间用户已断开
         return this._connect();
       }
       this.emit('conn-error', `服务发现失败：${e.message}。可点击「重新连接」再试，或将设备断电重启后重试。`);
     }
+    if (sess !== this._session) return; // 发现期间用户已断开
     this.emit('tree');
     const resumed = await this._resubscribe();
+    if (sess !== this._session) return; // 订阅恢复期间用户已断开
     if (resumed) this.emit('log', { dir: 'sys', text: `已恢复订阅 ${resumed} 个特征` });
     this.emit('log', { dir: 'sys', text: `GATT 就绪：${this.tree.length} 个服务，${this.chars.size} 个特征` });
     this.emit('connected');
@@ -215,7 +237,7 @@ export class BleAdapter extends EventBus {
 
   async discover() {
     this.chars.clear();
-    this._handlers.clear();
+    this._notifyHandlers.clear();
     this._svcOf.clear();
     this.tree = [];
     const services = await this._withTimeout(
@@ -259,20 +281,23 @@ export class BleAdapter extends EventBus {
   }
 
   disconnect() {
+    const wasConnected = this.connected;
     this._manualClose = true;
+    this._session++; // 使进行中的连接/发现/重试流水线全部失效
     this._connecting = false;
     this._clearReconnect();
-    this.stopPoll(true);
+    this.stopPoll(false); // 有定时任务时发出 poll 结束事件，复位 GATT 页按钮
     this._stopWatch();
     try { this.device?.gatt.disconnect(); } catch { /* ignore */ }
     this.emit('state');
+    this.emit('log', { dir: 'sys', text: wasConnected ? '已手动断开连接' : '已取消连接' });
   }
 
   _onDisconnected() {
-    this.stopPoll(true);
-    this.emit('poll', null);
+    this.stopPoll(false);
     this.emit('state');
-    this.emit('log', { dir: 'sys', text: '连接已断开' });
+    // 手动断开由 disconnect() 记录日志；这里只记录意外断开
+    if (!this._manualClose) this.emit('log', { dir: 'sys', text: '连接已断开' });
     this._scheduleReconnect();
   }
 
@@ -306,7 +331,7 @@ export class BleAdapter extends EventBus {
     this.server = null;
     this.tree = [];
     this.chars.clear();
-    this._handlers.clear();
+    this._notifyHandlers.clear();
     this._svcOf.clear();
     this.subscribedKeys.clear();
     this.emit('state');
@@ -348,12 +373,12 @@ export class BleAdapter extends EventBus {
 
   async unsubscribe(key) {
     const c = this.chars.get(key);
-    const handler = this._handlers.get(key);
+    const handler = this._notifyHandlers.get(key);
     if (c && handler) {
       try { c.removeEventListener('characteristicvaluechanged', handler); } catch { /* ignore */ }
       await c.stopNotifications();
     }
-    this._handlers.delete(key);
+    this._notifyHandlers.delete(key);
     this.subscribedKeys.delete(key);
     this.emit('subscribed', { key, uuid: c?.uuid, on: false });
   }
@@ -364,7 +389,7 @@ export class BleAdapter extends EventBus {
     const handler = (e) => this.emit('rx', { key, uuid, value: e.target.value, source: 'notify' });
     await c.startNotifications();
     c.addEventListener('characteristicvaluechanged', handler);
-    this._handlers.set(key, handler);
+    this._notifyHandlers.set(key, handler);
   }
 
   /** 定时读取（秒），启动时立即读一次；同一时间仅一个定时任务 */

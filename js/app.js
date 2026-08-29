@@ -1,6 +1,6 @@
 // 应用装配：连接 / GATT / 控制台 / 协议 四页签的全部界面逻辑
 
-import { BleAdapter } from './ble.js?v=4'; // ?v=N：发布后强制刷新浏览器缓存的模块
+import { BleAdapter } from './ble.js?v=5'; // ?v=N：发布后强制刷新浏览器缓存的模块
 import * as P from './protocol.js';
 import {
   bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText,

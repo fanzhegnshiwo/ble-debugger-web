@@ -4,6 +4,6 @@
   "type": "module",
   "description": "BLE 调试助手（网页版）— 基于 Web Bluetooth 的安卓浏览器 BLE 调试工具",
   "scripts": {
-    "test": "node --test tests/codec.test.js tests/scan.test.js"
+    "test": "node --test tests/codec.test.js tests/scan.test.js tests/disconnect.test.js"
   }
 }
