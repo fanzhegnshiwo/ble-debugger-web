@@ -1,6 +1,6 @@
 // 应用装配：连接 / GATT / 控制台 / 协议 四页签的全部界面逻辑
 
-import { BleAdapter } from './ble.js?v=3'; // ?v=N：发布后强制刷新浏览器缓存的模块
+import { BleAdapter } from './ble.js?v=4'; // ?v=N：发布后强制刷新浏览器缓存的模块
 import * as P from './protocol.js';
 import {
   bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText,
@@ -159,6 +159,19 @@ function bindConn() {
 
   $('#btn-disconnect').addEventListener('click', () => adapter.disconnect());
 
+  $('#btn-reconnect').addEventListener('click', async () => {
+    if (!adapter.device) { connMsg('还没有已选择的设备，请先扫描', 'warn'); return; }
+    connMsg(null);
+    try {
+      // attach 会清理定时器并走完整连接 + 服务发现（含自动重试）
+      await adapter.attach(adapter.device);
+    } catch (e) {
+      const msg = `重新连接失败：${e.message}`;
+      addLog('err', msg);
+      connMsg(msg);
+    }
+  });
+
   $('#btn-watch').addEventListener('click', async () => {
     try {
       await adapter.watchRssi(!adapter.watching);
@@ -222,6 +235,8 @@ function renderStatus() {
   pill.textContent = conn ? `已连接 · ${dev?.name || '未命名'}` : (busy ? '连接中…' : '未连接');
   // 连接进行中禁止再次发起，避免并发连接
   $('#btn-scan').disabled = !adapter.supported() || busy;
+  const rb = $('#btn-reconnect');
+  if (rb) rb.disabled = busy;
 
   const card = $('#device-card');
   if (!dev) { card.hidden = true; return; }

@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0e1216" />
 <title>BLE 调试助手 · 网页版</title>
 <link rel="stylesheet" href="css/style.css" />
-<script type="module" src="js/app.js?v=3"></script>
+<script type="module" src="js/app.js?v=4"></script>
 </head>
 <body>
 <header id="app-header">
@@ -70,6 +70,7 @@
       <div class="card-title">当前设备</div>
       <div id="device-info"></div>
       <div class="row wrap">
+        <button id="btn-reconnect" class="btn primary" type="button">重新连接</button>
         <button id="btn-watch" class="btn" type="button">监听广播（RSSI）</button>
         <button id="btn-disconnect" class="btn danger" type="button">断开连接</button>
       </div>

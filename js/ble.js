@@ -128,6 +128,7 @@ export class BleAdapter extends EventBus {
     this.device = device;
     this.device.addEventListener('gattserverdisconnected', this._onDisconnectedBound);
     this._manualClose = false;
+    this._discoveryRetried = false;
     await this._connect();
   }
 
@@ -183,9 +184,16 @@ export class BleAdapter extends EventBus {
     try {
       await this.discover();
     } catch (e) {
-      // 连接已建立但服务发现失败：GATT 页会显示空树，需在连接页给出可见提示
-      this.emit('conn-error', `服务发现失败：${e.message}。可尝试断开后重新连接。`);
       this.emit('log', { dir: 'err', text: `服务发现失败：${e.message}` });
+      // 服务发现失败/超时：断开后全新连接重试一次（Android GATT 缓存问题的标准解法）
+      if (!this._discoveryRetried) {
+        this._discoveryRetried = true;
+        this.emit('conn-error', `服务发现失败（${e.message}），正在断开并重新连接重试…`);
+        try { this.device.gatt.disconnect(); } catch { /* ignore */ }
+        await new Promise((r) => setTimeout(r, 1200));
+        return this._connect();
+      }
+      this.emit('conn-error', `服务发现失败：${e.message}。可点击「重新连接」再试，或将设备断电重启后重试。`);
     }
     this.emit('tree');
     const resumed = await this._resubscribe();
@@ -194,16 +202,33 @@ export class BleAdapter extends EventBus {
     this.emit('connected');
   }
 
+  /** 通用超时包装：Android 上 GATT 调用可能无限挂起 */
+  _withTimeout(promise, ms, label) {
+    let timer = null;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}超时（${Math.round(ms / 1000)} 秒）`)), ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
   async discover() {
     this.chars.clear();
     this._handlers.clear();
     this._svcOf.clear();
     this.tree = [];
-    const services = await this.server.getPrimaryServices();
+    const services = await this._withTimeout(
+      this.server.getPrimaryServices(), 15000, '服务发现',
+    );
+    this.emit('log', { dir: 'sys', text: `发现 ${services.length} 个服务，正在读取特征…` });
     for (const svc of services) {
       const node = { uuid: svc.uuid, label: serviceLabel(svc.uuid), chars: [], error: null };
       try {
-        for (const c of await svc.getCharacteristics()) {
+        const chars = await this._withTimeout(
+          svc.getCharacteristics(), 10000, `读取服务 ${node.label} 的特征`,
+        );
+        for (const c of chars) {
           const key = this.keyOf(svc.uuid, c.uuid);
           this.chars.set(key, c);
           this._svcOf.set(key, svc.uuid);
