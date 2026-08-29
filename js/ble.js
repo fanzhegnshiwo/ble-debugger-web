@@ -258,7 +258,24 @@ export class BleAdapter extends EventBus {
           try {
             descriptors = (await c.getDescriptors()).map((d) => ({ uuid: d.uuid, label: descLabel(d.uuid), obj: d }));
           } catch { /* 描述符获取失败不影响主流程 */ }
-          node.chars.push({ key, uuid: c.uuid, label: charLabel(c.uuid), props: { ...c.properties }, descriptors });
+          node.chars.push({
+            key, uuid: c.uuid, label: charLabel(c.uuid),
+            // 注意：Chrome 里 BluetoothCharacteristicProperties 的成员是原型访问器，
+            // {...c.properties} 展开会得到空对象（曾导致读取/订阅/发送按钮全部消失），
+            // 必须逐个显式读取
+            props: {
+              broadcast: !!c.properties.broadcast,
+              read: !!c.properties.read,
+              writeWithoutResponse: !!c.properties.writeWithoutResponse,
+              write: !!c.properties.write,
+              notify: !!c.properties.notify,
+              indicate: !!c.properties.indicate,
+              authenticatedSignedWrites: !!c.properties.authenticatedSignedWrites,
+              reliableWrite: !!c.properties.reliableWrite,
+              writableAuxiliaries: !!c.properties.writableAuxiliaries,
+            },
+            descriptors,
+          });
         }
       } catch (e) {
         node.error = e.message;
