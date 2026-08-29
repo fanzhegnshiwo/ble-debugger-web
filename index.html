@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0e1216" />
 <title>BLE 调试助手 · 网页版</title>
 <link rel="stylesheet" href="css/style.css" />
-<script type="module" src="js/app.js"></script>
+<script type="module" src="js/app.js?v=2"></script>
 </head>
 <body>
 <header id="app-header">
@@ -30,6 +30,7 @@
     <div id="https-banner" class="banner warn" hidden>
       当前页面不是安全上下文（HTTPS），Web Bluetooth 将不可用。请通过 HTTPS 或 localhost 访问。
     </div>
+    <div id="conn-msg" class="banner" hidden></div>
 
     <div class="card">
       <div class="card-title">扫描并连接</div>
@@ -54,7 +55,7 @@
         <input id="scan-optional" type="text" placeholder="默认已包含常用服务" />
       </div>
       <button id="btn-scan" class="btn primary block" type="button">选择设备并连接</button>
-      <p class="hint">浏览器将弹出系统设备选择器；列表由系统提供，页面无法直接获取原始扫描结果。</p>
+      <p class="hint">浏览器将弹出系统设备选择器；列表由系统提供。「仅列出有名称的设备」按 ASCII 名称首字符匹配，名称以中文等非 ASCII 字符开头的设备请改用「所有设备」或「前缀」模式。</p>
     </div>
 
     <div class="card">

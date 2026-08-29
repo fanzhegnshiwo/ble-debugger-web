@@ -1,6 +1,6 @@
 // 应用装配：连接 / GATT / 控制台 / 协议 四页签的全部界面逻辑
 
-import { BleAdapter } from './ble.js';
+import { BleAdapter } from './ble.js?v=2'; // ?v=N：发布后强制刷新浏览器缓存的模块
 import * as P from './protocol.js';
 import {
   bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText,
@@ -17,6 +17,16 @@ const el = (tag, cls, text) => {
 };
 const hex2 = (b) => b.toString(16).padStart(2, '0').toUpperCase();
 const charShort = (uuid) => shortUuid(uuid) || String(uuid || '').slice(0, 13);
+
+/** 连接页消息横幅：err（红）/ ok（绿）/ warn（黄）；空文本隐藏 */
+function connMsg(text, kind = 'err') {
+  const n = $('#conn-msg');
+  if (!n) return;
+  if (!text) { n.hidden = true; n.textContent = ''; return; }
+  n.hidden = false;
+  n.className = 'banner' + (kind === 'ok' ? ' ok' : kind === 'warn' ? ' warn' : '');
+  n.textContent = text;
+}
 
 const PROP_BADGES = [
   ['read', '读'], ['write', '写'], ['writeWithoutResponse', '无响应写'],
@@ -127,6 +137,7 @@ function bindConn() {
 
   $('#btn-scan').addEventListener('click', async () => {
     saveScan();
+    connMsg(null);
     const services = S.scan.services.split(/[,，\s]+/).filter(Boolean);
     const optionalServices = S.scan.optional.split(/[,，\s]+/).filter(Boolean);
     try {
@@ -137,10 +148,10 @@ function bindConn() {
         optionalServices,
       });
     } catch (e) {
-      const msg = /cancel|cancelled|选择器|chooser/i.test(e.message || '')
-        ? '已取消设备选择'
-        : `连接失败：${e.message}`;
+      const cancelled = /cancel|cancelled|选择器|chooser/i.test(e.message || '');
+      const msg = cancelled ? '已取消设备选择' : `连接失败：${e.message}`;
       addLog('err', msg);
+      connMsg(msg, cancelled ? 'ok' : 'err');
     }
   });
 
@@ -151,8 +162,11 @@ function bindConn() {
   $('#btn-watch').addEventListener('click', async () => {
     try {
       await adapter.watchRssi(!adapter.watching);
+      connMsg(null);
     } catch (e) {
-      addLog('err', `监听广播失败：${e.message}`);
+      const msg = `监听广播失败：${e.message}`;
+      addLog('err', msg);
+      connMsg(msg);
     }
     renderStatus();
   });
@@ -179,8 +193,13 @@ async function renderKnown() {
     const btnC = el('button', 'btn small primary', '连接');
     btnC.type = 'button';
     btnC.onclick = async () => {
+      connMsg(null);
       try { await adapter.attach(d); }
-      catch (e) { addLog('err', `连接失败：${e.message}`); }
+      catch (e) {
+        const msg = `连接失败：${e.message}`;
+        addLog('err', msg);
+        connMsg(msg);
+      }
     };
     const btnF = el('button', 'btn small', '忘记');
     btnF.type = 'button';
@@ -194,6 +213,7 @@ async function renderKnown() {
 }
 
 function renderStatus() {
+  if (adapter.connected) connMsg(null);
   const pill = $('#status-pill');
   const dev = adapter.device;
   const conn = adapter.connected;

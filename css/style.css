@@ -153,6 +153,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   font-size: 13.5px;
 }
 .banner.warn { background: #4d3a12; border-color: #8a6a1f; color: #ffe4b5; }
+.banner.ok { background: #14351f; border-color: #2f7a44; color: #c9f0d4; }
 
 .pill {
   font-size: 12.5px;

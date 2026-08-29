@@ -13,12 +13,64 @@ const COMMON_OPTIONAL = [
   '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
 ];
 
-/** "180F" / "0xFFE0" -> 数字别名；其余（标准名 / 完整 UUID）原样返回小写 */
-function serviceToken(tok) {
+// 「仅列出有名称的设备」的实现：Web Bluetooth 没有"有名称"过滤项，
+// 且 Chrome 会拒绝空 namePrefix（报 'namePrefix' must be non-empty），
+// 因此用可打印 ASCII 首字符集合近似（名称以中文等非 ASCII 字符开头的设备不会出现）。
+const NAMED_PREFIXES = [];
+for (let c = 0x20; c <= 0x7e; c++) NAMED_PREFIXES.push(String.fromCharCode(c));
+
+// 规范定义的标准服务名（BluetoothServiceName），requestDevice 只接受这些名称
+const KNOWN_SERVICE_NAMES = new Set([
+  'alert_notification', 'battery_service', 'blood_pressure', 'body_composition',
+  'current_time', 'cycling_power', 'cycling_speed_and_cadence', 'device_information',
+  'environmental_sensing', 'fitness_machine', 'generic_access', 'generic_attribute',
+  'glucose', 'health_thermometer', 'heart_rate', 'human_interface_device',
+  'immediate_alert', 'link_loss', 'mesh_provisioning_service', 'mesh_proxy_service',
+  'phone_alert_status', 'pulse_oximeter', 'reconnection_configuration',
+  'reference_time_update', 'running_speed_and_cadence', 'scan_parameters',
+  'tx_power', 'user_data', 'weight_scale',
+]);
+
+const FULL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * 服务标识解析："180F"/"0xFFE0" -> 16 位数字别名；完整 UUID -> 小写字符串；
+ * 规范标准名 -> 原样；其余非法输入 -> null（过滤掉，避免 requestDevice 直接抛错）。
+ */
+export function serviceToken(tok) {
   const t = String(tok || '').trim().toLowerCase();
   if (!t) return null;
-  if (/^0x[0-9a-f]+$/.test(t) || /^[0-9a-f]{4}$/.test(t)) return parseInt(t, 16);
-  return t;
+  if (/^0x[0-9a-f]{1,4}$/.test(t) || /^[0-9a-f]{1,4}$/.test(t)) return parseInt(t, 16);
+  if (FULL_UUID_RE.test(t)) return t;
+  if (KNOWN_SERVICE_NAMES.has(t)) return t;
+  return null;
+}
+
+/**
+ * 构造 requestDevice 参数（纯函数，可在 Node 中单测）。
+ * - all: acceptAllDevices（services 转入 optionalServices 保证连接后可访问）
+ * - prefix: 单个 namePrefix 过滤器（空前缀回退为 named 集合）
+ * - named: 可打印 ASCII 首字符集合过滤器；提供 services 时做交叉乘积（有名称 AND 任一服务）
+ */
+export function buildScanRequest(opts = {}) {
+  const req = { optionalServices: [] };
+  const extra = (opts.optionalServices || []).map(serviceToken).filter(Boolean);
+  const svcs = (opts.services || []).map(serviceToken).filter(Boolean);
+  req.optionalServices = [...new Set([...extra, ...svcs, ...COMMON_OPTIONAL])];
+
+  if (opts.mode === 'all') {
+    req.acceptAllDevices = true;
+    return req;
+  }
+
+  const prefixFilters = (opts.mode === 'prefix' && opts.namePrefix)
+    ? [{ namePrefix: opts.namePrefix }]
+    : NAMED_PREFIXES.map((c) => ({ namePrefix: c }));
+
+  req.filters = svcs.length
+    ? prefixFilters.flatMap((f) => svcs.map((s) => ({ ...f, services: [s] })))
+    : prefixFilters;
+  return req;
 }
 
 export class BleAdapter extends EventBus {
@@ -57,23 +109,7 @@ export class BleAdapter extends EventBus {
    */
   async requestAndConnect(opts = {}) {
     if (!this.supported()) throw new Error('当前浏览器不支持 Web Bluetooth');
-    const req = { optionalServices: [] };
-
-    const extra = (opts.optionalServices || []).map(serviceToken).filter(Boolean);
-    req.optionalServices = [...new Set([...extra, ...COMMON_OPTIONAL])];
-
-    if (opts.mode === 'all') {
-      req.acceptAllDevices = true;
-    } else {
-      const filter = {};
-      if (opts.mode === 'prefix' && opts.namePrefix) filter.namePrefix = opts.namePrefix;
-      else filter.namePrefix = ''; // 空前缀 = 仅列出有名称的设备
-      const svcs = (opts.services || []).map(serviceToken).filter(Boolean);
-      if (svcs.length) filter.services = svcs;
-      req.filters = [filter];
-    }
-
-    const device = await navigator.bluetooth.requestDevice(req);
+    const device = await navigator.bluetooth.requestDevice(buildScanRequest(opts));
     await this.attach(device);
     return device;
   }
