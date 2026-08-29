@@ -167,6 +167,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   text-overflow: ellipsis;
 }
 .pill.on { color: var(--rx); border-color: var(--rx); }
+.pill.busy { color: var(--warn); border-color: var(--warn); }
 .pill.off { color: var(--muted); }
 
 /* ---------- 连接页 ---------- */

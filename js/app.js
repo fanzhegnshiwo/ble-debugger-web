@@ -1,6 +1,6 @@
 // 应用装配：连接 / GATT / 控制台 / 协议 四页签的全部界面逻辑
 
-import { BleAdapter } from './ble.js?v=2'; // ?v=N：发布后强制刷新浏览器缓存的模块
+import { BleAdapter } from './ble.js?v=3'; // ?v=N：发布后强制刷新浏览器缓存的模块
 import * as P from './protocol.js';
 import {
   bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText,
@@ -217,8 +217,11 @@ function renderStatus() {
   const pill = $('#status-pill');
   const dev = adapter.device;
   const conn = adapter.connected;
-  pill.className = 'pill ' + (conn ? 'on' : 'off');
-  pill.textContent = conn ? `已连接 · ${dev?.name || '未命名'}` : '未连接';
+  const busy = adapter.connecting;
+  pill.className = 'pill ' + (conn ? 'on' : busy ? 'busy' : 'off');
+  pill.textContent = conn ? `已连接 · ${dev?.name || '未命名'}` : (busy ? '连接中…' : '未连接');
+  // 连接进行中禁止再次发起，避免并发连接
+  $('#btn-scan').disabled = !adapter.supported() || busy;
 
   const card = $('#device-card');
   if (!dev) { card.hidden = true; return; }
@@ -788,6 +791,11 @@ function init() {
 
   adapter.on('log', (e) => addLog(e.dir, e.text));
   adapter.on('state', renderStatus);
+  adapter.on('conn-error', (text) => connMsg(text, 'warn'));
+  adapter.on('connected', () => {
+    const n = adapter.tree.length;
+    if (n) connMsg(`已连接：${n} 个服务 / ${adapter.chars.size} 个特征，切换到「GATT」页操作`, 'ok');
+  });
   adapter.on('tree', () => { renderGatt(); renderProtoChips(); });
   adapter.on('rx', handleRx);
   adapter.on('tx', (e) => {

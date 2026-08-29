@@ -87,6 +87,7 @@ export class BleAdapter extends EventBus {
     this._pollTimer = null;
     this.autoReconnect = true;
     this._manualClose = false;
+    this._connecting = false;
     this._retries = 0;
     this._reconnectTimer = null;
     this._watching = false;
@@ -96,6 +97,7 @@ export class BleAdapter extends EventBus {
 
   get connected() { return !!(this.device?.gatt?.connected); }
   get watching() { return this._watching; }
+  get connecting() { return !!this._connecting; }
 
   supported() { return typeof navigator !== 'undefined' && 'bluetooth' in navigator; }
 
@@ -109,6 +111,7 @@ export class BleAdapter extends EventBus {
    */
   async requestAndConnect(opts = {}) {
     if (!this.supported()) throw new Error('当前浏览器不支持 Web Bluetooth');
+    if (this._connecting) throw new Error('正在连接中，请稍候');
     const device = await navigator.bluetooth.requestDevice(buildScanRequest(opts));
     await this.attach(device);
     return device;
@@ -116,7 +119,10 @@ export class BleAdapter extends EventBus {
 
   /** 连接一个已知设备（来自 requestDevice 或 getDevices） */
   async attach(device) {
+    if (this._connecting) throw new Error('正在连接中，请稍候');
     if (this.device && this.device !== device) this._reset();
+    // 清掉 pending 的自动重连定时器，避免与新连接并发（同设备重连场景）
+    this._clearReconnect();
     // 先移除再添加，避免同一设备重复绑定监听
     this.device?.removeEventListener('gattserverdisconnected', this._onDisconnectedBound);
     this.device = device;
@@ -125,28 +131,67 @@ export class BleAdapter extends EventBus {
     await this._connect();
   }
 
+  /** 单次 GATT 连接，带超时（Android 上 connect 可能长期 pending） */
+  async _gattConnectOnce(timeoutMs) {
+    let timer = null;
+    try {
+      await Promise.race([
+        this.device.gatt.connect(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(
+            `连接超时（${Math.round(timeoutMs / 1000)} 秒），设备可能不在范围内或已关机`,
+          )), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** GATT 连接：失败自动重试 1 次（Android 配对后首连常见瞬时失败） */
+  async _connectGatt() {
+    const TIMEOUT = 20000;
+    try {
+      await this._gattConnectOnce(TIMEOUT);
+    } catch (e) {
+      this.emit('log', { dir: 'sys', text: `首次连接失败（${e.message}），1.5 秒后自动重试…` });
+      await new Promise((r) => setTimeout(r, 1500));
+      // 清理可能残留的半连接状态后重试
+      try { this.device.gatt.disconnect(); } catch { /* ignore */ }
+      await this._gattConnectOnce(TIMEOUT);
+    }
+    this.server = this.device.gatt;
+  }
+
   async _connect() {
     const name = this.device?.name || '设备';
+    this._connecting = true;
+    this.emit('state');
     this.emit('log', { dir: 'sys', text: `正在连接 ${name}…` });
     try {
-      this.server = await this.device.gatt.connect();
+      await this._connectGatt();
     } catch (e) {
+      this._connecting = false;
       this.emit('log', { dir: 'err', text: `连接失败：${e.message}` });
       this.emit('state');
       throw e;
     }
+    this._connecting = false;
     this._retries = 0;
     this.emit('state');
     this.emit('log', { dir: 'sys', text: '已连接，正在发现服务…' });
     try {
       await this.discover();
-      this.emit('tree');
     } catch (e) {
+      // 连接已建立但服务发现失败：GATT 页会显示空树，需在连接页给出可见提示
+      this.emit('conn-error', `服务发现失败：${e.message}。可尝试断开后重新连接。`);
       this.emit('log', { dir: 'err', text: `服务发现失败：${e.message}` });
     }
+    this.emit('tree');
     const resumed = await this._resubscribe();
     if (resumed) this.emit('log', { dir: 'sys', text: `已恢复订阅 ${resumed} 个特征` });
     this.emit('log', { dir: 'sys', text: `GATT 就绪：${this.tree.length} 个服务，${this.chars.size} 个特征` });
+    this.emit('connected');
   }
 
   async discover() {
@@ -190,10 +235,12 @@ export class BleAdapter extends EventBus {
 
   disconnect() {
     this._manualClose = true;
+    this._connecting = false;
     this._clearReconnect();
     this.stopPoll(true);
     this._stopWatch();
     try { this.device?.gatt.disconnect(); } catch { /* ignore */ }
+    this.emit('state');
   }
 
   _onDisconnected() {
@@ -227,6 +274,7 @@ export class BleAdapter extends EventBus {
   _reset() {
     this.stopPoll(true);
     this._clearReconnect();
+    this._connecting = false;
     this._stopWatch();
     this.device?.removeEventListener('gattserverdisconnected', this._onDisconnectedBound);
     this.device = null;
