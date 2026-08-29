@@ -1,9 +1,9 @@
 // 应用装配：连接 / GATT / 控制台 / 协议 四页签的全部界面逻辑
 
-import { BleAdapter } from './ble.js?v=5'; // ?v=N：发布后强制刷新浏览器缓存的模块
+import { BleAdapter } from './ble.js?v=6'; // ?v=N：发布后强制刷新浏览器缓存的模块
 import * as P from './protocol.js';
 import {
-  bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText,
+  bytesOf, encodeUtf8, formatBytes, parseHexInput, nowTs, store, downloadText, toAscii,
 } from './utils.js';
 import { expandUuid, shortUuid } from './gatt-names.js';
 
@@ -388,12 +388,18 @@ function charCard(ch) {
       const row = el('div', 'desc-row');
       const info = el('div', 'desc-info');
       info.append(el('span', 'desc-name', d.label), el('span', 'desc-uuid mono', shortUuid(d.uuid) || d.uuid));
-      const b = el('button', 'btn small', '读取');
+      const b = el('button', 'btn small', '读描述符');
       b.type = 'button';
       b.onclick = async () => {
         try {
           const v = await d.obj.readValue();
-          addLog('rx', `${shortUuid(d.uuid) || '描述符'} ← ${formatBytes(v, S.viewFormat)}`);
+          let text = `描述符 ${shortUuid(d.uuid) || d.uuid.slice(0, 8)} ← ${formatBytes(v, S.viewFormat)}`;
+          // 描述符常为文本（如 2901 用户描述），纯可打印时附带解码，避免误当成特征值
+          const bytes = bytesOf(v);
+          if (bytes.length && bytes.every((x) => x >= 0x20 && x < 0x7f)) {
+            text += `（"${toAscii(bytes)}"）`;
+          }
+          addLog('rx', text);
         } catch (e) { addLog('err', `描述符读取失败：${e.message}`); }
       };
       row.append(info, b);
